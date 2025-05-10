@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=80"]
+
+[project]
+name = "supertoken-claim-bot"
+dynamic = ["version"]
+dependencies = [
+    "eth-ape",
+]
+
+[[tool.ape.plugins]]
+name = "aws"
+[[tool.ape.plugins]]
+name = "optimism"
+[[tool.ape.plugins]]
+name = "safe"
+[[tool.ape.plugins]]
+name = "tokens"
