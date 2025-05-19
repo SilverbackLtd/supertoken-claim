@@ -57,7 +57,12 @@ def check_grant(_):
     claiming = bot.state.claim_in_progress = True
 
     if isinstance(grantee, SafeAccount):
-        txn = grant.downgrade.as_transaction(CLAIM_THRESHOLD, sender=grantee)
+        txn = grant.downgrade.as_transaction(
+            CLAIM_THRESHOLD,
+            sender=grantee,
+            # NOTE: Gas limit doesn't matter, but bypasses gas estimation error
+            gas_limit=200_000,
+        )
         grantee.propose(txn, submitter=bot.signer)
         # NOTE: SafeTx submitted but not broadcast yet
 
