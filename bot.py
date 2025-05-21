@@ -51,25 +51,41 @@ def check_grant(_):
     ) < CLAIM_THRESHOLD:  # Not enough yet to claim
         return dict(available=available / 10 ** TOKEN.decimals())
 
-    elif bot.state.claim_in_progress:  # Another task is claiming
-        return dict(available=available / 10 ** TOKEN.decimals())
+    amount_to_claim = available - (available % CLAIM_THRESHOLD)
+
+    nonce_to_replace = None
+    if bot.state.claim_in_progress:  # Another task is claiming
+        for safe_tx, _ in grantee.pending_transactions():
+            if safe_tx.to == grant:
+                try:
+                    decoded = grant.downgrade.decode(safe_tx.data)[1]
+                except Exception:
+                    decoded = {}
+
+                if decoded.get("amount") < amount_to_claim:
+                    nonce_to_replace = safe_tx.nonce
+                    break
+
+        else:
+            # Claim in progress, and it is the correct amount
+            return dict(available=available / 10 ** TOKEN.decimals())
 
     claiming = bot.state.claim_in_progress = True
-
     if isinstance(grantee, SafeAccount):
         txn = grant.downgrade.as_transaction(
-            CLAIM_THRESHOLD,
+            amount_to_claim,
             sender=grantee,
             # NOTE: Gas limit doesn't matter, but bypasses gas estimation error
             gas_limit=200_000,
+            nonce=nonce_to_replace,
         )
         grantee.propose(txn, submitter=bot.signer)
         # NOTE: SafeTx submitted but not broadcast yet
 
     else:  # grantee == bot.signer
-        grant.downgrade(CLAIM_THRESHOLD, sender=bot.signer, confirmations_required=0)
+        grant.downgrade(amount_to_claim, sender=bot.signer, confirmations_required=0)
         # We have successfully claimed if transaction broadcasts
-        available -= CLAIM_THRESHOLD
+        available -= amount_to_claim
         claiming = False
 
     return dict(available=available / 10 ** TOKEN.decimals(), claiming=claiming)
