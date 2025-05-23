@@ -1,6 +1,7 @@
 import os
+from decimal import Decimal
 
-from ape import Contract, accounts, convert
+from ape import Contract, accounts
 from ape_safe import SafeAccount
 from ape_tokens import tokens
 from silverback import SilverbackBot
@@ -23,9 +24,7 @@ else:
     ), "Signer must either be a signer in Safe, or a delegate"
 
 TOKEN = tokens[os.environ["GRANT_TOKEN_SYMBOL"]]
-CLAIM_THRESHOLD = convert(
-    f"{os.environ['GRANT_CLAIM_THRESHOLD']} {TOKEN.symbol()}", int
-)
+CLAIM_THRESHOLD = Decimal(os.environ['GRANT_CLAIM_THRESHOLD'])
 
 
 @bot.on_startup()
@@ -45,14 +44,14 @@ def setup(_):
 
 @bot.cron(os.environ.get("GRANT_CHECK_FREQUENCY", "*/5 * * * *"))
 def available(_):
-    return grant.balanceOf(grantee)
+    return Decimal(grant.balanceOf(grantee)) / 10**Decimal(TOKEN.decimals())
 
 
 if isinstance(grantee, SafeAccount):
 
     @bot.on_metric("available", ge=CLAIM_THRESHOLD)
-    async def execute_claim(available: int):
-        claim_amount = available - (available % CLAIM_THRESHOLD)
+    async def execute_claim(available: Decimal):
+        claim_amount = int((available - (available % CLAIM_THRESHOLD)) * 10**TOKEN.decimals())
 
         nonce_to_replace = None
         if bot.state.claim_in_progress:  # Another task is claiming
@@ -85,8 +84,8 @@ if isinstance(grantee, SafeAccount):
 else:  # bot.signer == grantee
 
     @bot.on_metric("available", ge=CLAIM_THRESHOLD)
-    async def execute_claim(available: int):
-        claim_amount = available - (available % CLAIM_THRESHOLD)
+    async def execute_claim(available: Decimal):
+        claim_amount = int((available - (available % CLAIM_THRESHOLD)) * 10**TOKEN.decimals())
         if not bot.state.claim_in_progress:
             bot.state.claim_in_progress = True
             grant.downgrade(claim_amount, sender=bot.signer, confirmations_required=0)
