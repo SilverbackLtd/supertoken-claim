@@ -33,66 +33,68 @@ def setup(_):
     bot.state.claim_in_progress = False
 
     if not isinstance(grantee, SafeAccount):
-        return dict(claiming=False)  # Claiming for self or unaffiliated account
+        return  # Claiming for self or unaffiliated account
 
     # NOTE: If grantee is an AccountAPI class that isn't `bot.signer`,
     #       assume it is a Safe and check if any txns already pending
     for safe_tx, _ in grantee.pending_transactions():
         if safe_tx.to == grant:
             bot.state.claim_in_progress = True
+            break
 
-    return dict(claiming=bot.state.claim_in_progress)
+
+@bot.cron(os.environ.get("GRANT_CHECK_FREQUENCY", "*/5 * * * *"))
+def available(_):
+    return grant.balanceOf(grantee)
 
 
-@bot.cron(os.environ.get("GRANT_CLAIM_FREQUENCY", "*/5 * * * *"))
-def check_grant(_):
-    if (
-        available := grant.balanceOf(grantee)
-    ) < CLAIM_THRESHOLD:  # Not enough yet to claim
-        return dict(available=available / 10 ** TOKEN.decimals())
+if isinstance(grantee, SafeAccount):
 
-    amount_to_claim = available - (available % CLAIM_THRESHOLD)
+    @bot.on_metric("available", ge=CLAIM_THRESHOLD)
+    async def execute_claim(available: int):
+        claim_amount = available - (available % CLAIM_THRESHOLD)
 
-    nonce_to_replace = None
-    if bot.state.claim_in_progress:  # Another task is claiming
-        for safe_tx, _ in grantee.pending_transactions():
-            if safe_tx.to == grant:
-                try:
-                    decoded = grant.downgrade.decode(safe_tx.data)[1]
-                except Exception:
-                    decoded = {}
+        nonce_to_replace = None
+        if bot.state.claim_in_progress:  # Another task is claiming
+            for safe_tx, _ in grantee.pending_transactions():
+                if safe_tx.to == grant:
+                    try:
+                        decoded = grant.downgrade.decode(safe_tx.data)[1]
+                    except Exception:
+                        decoded = {}
 
-                if decoded.get("amount") < amount_to_claim:
-                    nonce_to_replace = safe_tx.nonce
-                    break
+                    if (amount := decoded.get("amount")) == claim_amount:
+                        return  # Transaction already exists
 
-        else:
-            # Claim in progress, and it is the correct amount
-            return dict(available=available / 10 ** TOKEN.decimals())
+                    elif amount < claim_amount:
+                        nonce_to_replace = safe_tx.nonce
+                        break
 
-    claiming = bot.state.claim_in_progress = True
-    if isinstance(grantee, SafeAccount):
+        bot.state.claim_in_progress = True
         txn = grant.downgrade.as_transaction(
-            amount_to_claim,
+            claim_amount,
             sender=grantee,
             # NOTE: Gas limit doesn't matter, but bypasses gas estimation error
             gas_limit=200_000,
-            nonce=nonce_to_replace,
+            nonce=nonce_to_replace,  # if `None`, proposed as new SafeTx
         )
         grantee.propose(txn, submitter=bot.signer)
         # NOTE: SafeTx submitted but not broadcast yet
 
-    else:  # grantee == bot.signer
-        grant.downgrade(amount_to_claim, sender=bot.signer, confirmations_required=0)
-        # We have successfully claimed if transaction broadcasts
-        available -= amount_to_claim
-        claiming = False
 
-    return dict(available=available / 10 ** TOKEN.decimals(), claiming=claiming)
+else:  # bot.signer == grantee
+
+    @bot.on_metric("available", ge=CLAIM_THRESHOLD)
+    async def execute_claim(available: int):
+        claim_amount = available - (available % CLAIM_THRESHOLD)
+        if not bot.state.claim_in_progress:
+            bot.state.claim_in_progress = True
+            grant.downgrade(claim_amount, sender=bot.signer, confirmations_required=0)
+            # We have successfully claimed if transaction broadcasts
 
 
 # Record when the claim is completed.
 @bot.on_(grant.TokenDowngraded, account=grantee)
-def receive_claim(log):
+def claimed(log):
     bot.state.claim_in_progress = False
-    return dict(claimed=log.amount / 10 ** TOKEN.decimals(), claiming=False)
+    return log.amount
