@@ -1,7 +1,9 @@
 import os
 from decimal import Decimal
 
-from ape import Contract, accounts
+from ape import Contract, accounts, convert
+from ape.exceptions import ContractDataError
+from ape.types import AddressType, HexBytes
 from ape_safe import SafeAccount
 from ape_tokens import tokens
 from silverback import SilverbackBot
@@ -16,16 +18,16 @@ if not (grantee := os.environ.get("GRANTEE_SAFE_ALIAS")):
 # NOTE: If claiming for a Safe, set `GRANTEE_ADDRESS_OR_ALIAS=<safe.alias>`
 else:
     grantee = accounts.load(grantee)
-    assert isinstance(grantee, SafeAccount), (
-        "Grantee must be Safe if different than signer"
-    )
+    assert isinstance(
+        grantee, SafeAccount
+    ), "Grantee must be Safe if different than signer"
     assert (
         bot.signer in grantee.local_signers or bot.signer in grantee.all_delegates()
     ), "Signer must either be a signer in Safe, or a delegate"
 
 TOKEN = tokens[os.environ["GRANT_TOKEN_SYMBOL"]]
 CLAIM_THRESHOLD = Decimal(os.environ["GRANT_CLAIM_THRESHOLD"])
-RECEIVER = os.environ.get("GRANT_CLAIM_RECEIVER")
+RECEIVER = convert(os.environ.get("GRANT_CLAIM_RECEIVER"), AddressType)
 
 
 @bot.on_startup()
@@ -61,19 +63,25 @@ if isinstance(grantee, SafeAccount):
             for safe_tx, _ in grantee.pending_transactions():
                 if safe_tx.to == grant:
                     try:
-                        decoded = grant.downgrade.decode(safe_tx.data)[1]
-                    except Exception:
-                        try:
-                            decoded = grant.downgradeTo.decode(safe_tx.data)[1]
-                        except Exception:
-                            decoded = {}
+                        method_signature, decoded_args = grant.decode_input(
+                            HexBytes(safe_tx.data)
+                        )
+                    except ContractDataError:
+                        continue
 
-                    if (amount := decoded.get("amount")) == claim_amount:
-                        return  # Transaction already exists
+                    if not method_signature.startswith("downgrade"):
+                        continue
+
+                    # NOTE: If `downgrade`, this will be `None` (but so should `RECEIVER`)
+                    elif decoded_args.get("to") != RECEIVER:
+                        continue
+
+                    elif (amount := decoded_args.get("amount")) == claim_amount:
+                        return  # Transaction already exists, so we don't need to do anything
 
                     elif amount < claim_amount:
                         nonce_to_replace = safe_tx.nonce
-                        break
+                        break  # Found our transaction to replace
 
         bot.state.claim_in_progress = True
         if RECEIVER:
