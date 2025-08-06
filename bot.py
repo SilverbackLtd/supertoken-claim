@@ -1,7 +1,7 @@
 import os
 from decimal import Decimal
 
-from ape import Contract, accounts, convert
+from ape import Contract, accounts, convert, project
 from ape.exceptions import ContractDataError
 from ape.types import AddressType, HexBytes
 from ape_safe import SafeAccount
@@ -25,6 +25,12 @@ else:
         bot.signer in grantee.local_signers or bot.signer in grantee.all_delegates()
     ), "Signer must either be a signer in Safe, or a delegate"
 
+if claim_module_address := os.environ.get("CLAIM_MODULE_ADDRESS"):
+    claim_module = project.ClaimModule.at(claim_module_address)
+
+else:
+    claim_module = None
+
 TOKEN = tokens[os.environ["GRANT_TOKEN_SYMBOL"]]
 CLAIM_THRESHOLD = Decimal(os.environ["GRANT_CLAIM_THRESHOLD"])
 RECEIVER = convert(os.environ.get("GRANT_CLAIM_RECEIVER"), AddressType)
@@ -34,7 +40,7 @@ RECEIVER = convert(os.environ.get("GRANT_CLAIM_RECEIVER"), AddressType)
 def setup(_):
     bot.state.claim_in_progress = False
 
-    if not isinstance(grantee, SafeAccount):
+    if not isinstance(grantee, SafeAccount) or claim_module:
         return  # Claiming for self or unaffiliated account
 
     # NOTE: If grantee is an AccountAPI class that isn't `bot.signer`,
@@ -50,7 +56,16 @@ def available(_):
     return Decimal(grant.balanceOf(grantee)) / 10 ** Decimal(TOKEN.decimals())
 
 
-if isinstance(grantee, SafeAccount):
+if claim_module:
+
+    @bot.on_metric("available", ge=CLAIM_THRESHOLD)
+    async def execute_claim(available: Decimal):
+        claim_amount = int(
+            (available - (available % CLAIM_THRESHOLD)) * 10 ** TOKEN.decimals()
+        )
+        claim_module.claim(claim_amount, sender=bot.signer, confirmations_required=0)
+
+elif isinstance(grantee, SafeAccount):
 
     @bot.on_metric("available", ge=CLAIM_THRESHOLD)
     async def execute_claim(available: Decimal):
