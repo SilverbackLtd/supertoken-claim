@@ -144,4 +144,4 @@ else:  # bot.signer == grantee
 @bot.on_(grant.TokenDowngraded, account=grantee)
 def claimed(log):
     bot.state.claim_in_progress = False
-    return log.amount
+    return Decimal(log.amount) / 10 ** Decimal(TOKEN.decimals())
