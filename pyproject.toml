@@ -11,6 +11,8 @@ dependencies = [
 [[tool.ape.plugins]]
 name = "aws"
 [[tool.ape.plugins]]
+name = "erpc"
+[[tool.ape.plugins]]
 name = "optimism"
 [[tool.ape.plugins]]
 name = "safe"
